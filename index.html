@@ -498,6 +498,22 @@ function playbackCandidates(item, fallbackUrl){
   if(fallbackUrl) candidates.unshift(fallbackUrl);
   return uniqueHosts(candidates).filter(url => !isMixedHttp(url));
 }
+function apiUrlForHost(host, url){
+  const base = `${host}/player_api.php?username=${encodeURIComponent(XTREAM.user)}&password=${encodeURIComponent(XTREAM.pass)}`;
+  try{
+    const parsed = new URL(url, location.href);
+    const extra = [];
+    parsed.searchParams.forEach((value, key)=>{
+      if(key !== 'username' && key !== 'password') extra.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+    });
+    return extra.length ? `${base}&${extra.join('&')}` : base;
+  }catch(e){
+    const query = (url.split('?')[1] || '').split('&')
+      .filter(part => part && !/^username=/i.test(part) && !/^password=/i.test(part))
+      .join('&');
+    return query ? `${base}&${query}` : base;
+  }
+}
 
 const PROXIES = [
   u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
@@ -506,7 +522,7 @@ const PROXIES = [
 function proxify(u){ return PROXIES[0](u); }
 async function fetchJSON(url){
   const errors = [];
-  const candidates = url.includes('/player_api.php?') ? gatewayHosts().map(host => url.replace(/^https?:\/\/[^/]+|^\/api\/iptv/, host)) : [url];
+  const candidates = url.includes('/player_api.php?') ? gatewayHosts().map(host => apiUrlForHost(host, url)) : [url];
   for (const candidate of candidates){
     try{
       const ctrl = new AbortController();
