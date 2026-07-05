@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>JeenaFlix — Premium OTT Streaming</title>
 <meta name="description" content="JeenaFlix premium OTT streaming — Movies, TV Series, Live TV, and OTT Apps." />
+<meta name="referrer" content="no-referrer" />
+<meta http-equiv="Permissions-Policy" content="camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), clipboard-read=(), clipboard-write=()" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data: blob:; connect-src 'self' https: http: blob:; media-src 'self' https: http: blob:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'" />
 <link rel="icon" href="https://www.jeenaflix.com/DOC-20260325-WA0063..png" />
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <style>
@@ -444,13 +447,57 @@ main{padding:0 0 110px 0;min-height:100vh}
 /* ====================== CONFIG ====================== */
 // Existing API credentials and data strictly maintained.
 const XTREAM = {
-  server: "zooox.top:8080",
+  server: "ogold.org:8080",
   port: 80,
   user: "farukh121",
   pass: "01123072",
 };
-const API_BASE = `http://${XTREAM.server}/player_api.php?username=${XTREAM.user}&password=${XTREAM.pass}`;
-const STREAM_BASE = `http://${XTREAM.server}`;
+const DIRECT_HOST = `http://${XTREAM.server}`;
+const GATEWAY_HOST = "https://project--6d62bd45-a830-4359-bd93-ee71a1252200.lovable.app/api/public/iptv";
+
+function uniqueHosts(hosts){
+  return hosts.filter((h,i,a)=>h && a.indexOf(h)===i);
+}
+function sameAppGateway(){
+  const h = location.hostname;
+  return h === "localhost" || h === "127.0.0.1" || h.endsWith(".netlify.app") || h.endsWith(".netlify.live") || h.endsWith(".lovable.app");
+}
+function gatewayHosts(){
+  if(location.protocol === "file:") return uniqueHosts([DIRECT_HOST, GATEWAY_HOST]);
+  if(sameAppGateway()) return uniqueHosts([GATEWAY_HOST, DIRECT_HOST]);
+  if(location.protocol === "https:") return uniqueHosts([GATEWAY_HOST]);
+  return uniqueHosts([DIRECT_HOST, GATEWAY_HOST]);
+}
+let ACTIVE_HOST = gatewayHosts()[0];
+let API_BASE = `${ACTIVE_HOST}/player_api.php?username=${XTREAM.user}&password=${XTREAM.pass}`;
+let STREAM_BASE = ACTIVE_HOST;
+function activateHost(host){
+  ACTIVE_HOST = host;
+  API_BASE = `${ACTIVE_HOST}/player_api.php?username=${XTREAM.user}&password=${XTREAM.pass}`;
+  STREAM_BASE = ACTIVE_HOST;
+}
+function streamUrl(kind, streamId, ext){
+  const path = kind === 'live' ? 'live' : kind === 'series' ? 'series' : 'movie';
+  const suffix = kind === 'live' ? 'm3u8' : (ext || 'mp4');
+  return `${STREAM_BASE}/${path}/${XTREAM.user}/${XTREAM.pass}/${streamId}.${suffix}`;
+}
+function streamUrlForHost(host, kind, streamId, ext){
+  const path = kind === 'live' ? 'live' : kind === 'series' ? 'series' : 'movie';
+  const suffix = kind === 'live' ? 'm3u8' : (ext || 'mp4');
+  return `${host}/${path}/${XTREAM.user}/${XTREAM.pass}/${streamId}.${suffix}`;
+}
+function isMixedHttp(url){
+  return location.protocol === 'https:' && /^http:\/\//i.test(url);
+}
+function playbackCandidates(item, fallbackUrl){
+  const candidates = [];
+  const kind = item.kind === 'series' ? 'series' : item.kind;
+  if(item.streamId){
+    gatewayHosts().forEach(host => candidates.push(streamUrlForHost(host, kind, item.streamId, item.ext)));
+  }
+  if(fallbackUrl) candidates.unshift(fallbackUrl);
+  return uniqueHosts(candidates).filter(url => !isMixedHttp(url));
+}
 
 const PROXIES = [
   u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
@@ -459,16 +506,27 @@ const PROXIES = [
 function proxify(u){ return PROXIES[0](u); }
 async function fetchJSON(url){
   const errors = [];
-  try{
-    const ctrl = new AbortController();
-    const to = setTimeout(()=>ctrl.abort(), 15000);
-    const r = await fetch(url, {signal: ctrl.signal});
-    clearTimeout(to);
-    if(r.ok){
-      const txt = await r.text();
-      try { return JSON.parse(txt); } catch(e){ errors.push('parse'); }
-    } else errors.push('direct '+r.status);
-  }catch(e){ errors.push('direct '+String(e).slice(0,30)); }
+  const candidates = url.includes('/player_api.php?') ? gatewayHosts().map(host => url.replace(/^https?:\/\/[^/]+|^\/api\/iptv/, host)) : [url];
+  for (const candidate of candidates){
+    try{
+      const ctrl = new AbortController();
+      const to = setTimeout(()=>ctrl.abort(), 15000);
+      const r = await fetch(candidate, {signal: ctrl.signal});
+      clearTimeout(to);
+      if(r.ok){
+        const txt = await r.text();
+        try {
+          const data = JSON.parse(txt);
+          if(Array.isArray(data) ? data.length : data && Object.keys(data).length){
+            const host = candidate.split('/player_api.php')[0];
+            activateHost(host);
+            return data;
+          }
+          errors.push('empty');
+        } catch(e){ errors.push('parse'); }
+      } else errors.push('direct '+r.status);
+    }catch(e){ errors.push('direct '+String(e).slice(0,30)); }
+  }
   for (const p of PROXIES){
     try{
       const ctrl = new AbortController();
@@ -490,6 +548,9 @@ let CATS = { movies: [], series: [], live: [] };
 
 let activeCat = { movies: 'All', series: 'All', live: 'All' };
 let hls = null;
+let playbackStartupTimer = null;
+let playbackAttemptToken = 0;
+let playbackCleanupFns = [];
 let CAT_MAP = { live:{}, vod:{}, series:{} }; 
 let SERIES_INFO_CACHE = {};
 let currentSeriesEpisodes = []; // To track for next/prev
@@ -547,7 +608,7 @@ async function loadAll(){
     items.push({
       id: id++, kind:'live', name: s.name, logo: s.stream_icon||'',
       group: group,
-      url: `${STREAM_BASE}/live/${XTREAM.user}/${XTREAM.pass}/${s.stream_id}.m3u8`,
+      url: streamUrl('live', s.stream_id),
       streamId: s.stream_id,
     });
   });
@@ -556,7 +617,7 @@ async function loadAll(){
     items.push({
       id: id++, kind:'movie', name: s.name, logo: s.stream_icon||'',
       group: CAT_MAP.vod[s.category_id] || 'Movies',
-      url: `${STREAM_BASE}/movie/${XTREAM.user}/${XTREAM.pass}/${s.stream_id}.${ext}`,
+      url: streamUrl('movie', s.stream_id, ext),
       streamId: s.stream_id, ext,
       rating: s.rating, year: s.year, plot: s.plot,
     });
@@ -583,7 +644,7 @@ async function resolveSeriesFirstEpisode(item){
   const ep = eps[firstSeason] && eps[firstSeason][0];
   if(!ep) return '';
   const ext = ep.container_extension || 'mp4';
-  return `${STREAM_BASE}/series/${XTREAM.user}/${XTREAM.pass}/${ep.id}.${ext}`;
+  return streamUrl('series', ep.id, ext);
 }
 
 /* ====================== INIT ====================== */
@@ -808,7 +869,7 @@ function renderEpisodeList(season){
   currentSeriesEpisodes = list.map(ep => {
     const ext = ep.container_extension || 'mp4';
     return {
-      url: `${STREAM_BASE}/series/${XTREAM.user}/${XTREAM.pass}/${ep.id}.${ext}`,
+      url: streamUrl('series', ep.id, ext),
       title: ep.title || ep.info?.name || `Episode ${ep.episode_num}`,
       img: (ep.info && (ep.info.movie_image||ep.info.cover_big)) || ctx.item.logo || '',
       plot: (ep.info && ep.info.plot) ? ep.info.plot : '',
@@ -919,6 +980,7 @@ async function playItem(id){
   const saved = parseFloat(localStorage.getItem('jf_resume_'+id)||'0');
 
   destroyHls();
+  const attemptToken = ++playbackAttemptToken;
   video.pause();
   video.removeAttribute('src');
   video.load();
@@ -929,13 +991,58 @@ async function playItem(id){
     catch(e){ showToast('Could not load episode'); playerEl.classList.remove('loading'); return; }
   }
   if(!url){ showToast('No stream URL'); playerEl.classList.remove('loading'); return; }
+  const sources = playbackCandidates(item, url);
+  if(!sources.length){ showToast('No playable stream URL'); playerEl.classList.remove('loading'); return; }
 
   const startWhenReady = ()=>{
+    if(attemptToken !== playbackAttemptToken) return;
     if(item.kind !== 'live' && saved>5 && isFinite(video.duration) && saved < video.duration-8) video.currentTime = saved;
-    video.play().then(()=>showControls()).catch(()=>showControls(true));
+    video.play()
+      .then(()=>showControls())
+      .catch(()=>{
+        playerEl.classList.remove('loading');
+        showControls(true);
+      });
   };
 
-  if(url.endsWith('.m3u8') || url.includes('.m3u8?')){
+  let sourceIndex = 0;
+  let recoveries = 0;
+  const clearStartupTimer = ()=>{
+    if(playbackStartupTimer){ clearTimeout(playbackStartupTimer); playbackStartupTimer = null; }
+  };
+  const addOnce = (target, event, fn)=>{
+    const wrapped = (...args)=>{
+      if(attemptToken !== playbackAttemptToken) return;
+      fn(...args);
+    };
+    target.addEventListener(event, wrapped, {once:true});
+    playbackCleanupFns.push(()=>target.removeEventListener(event, wrapped));
+  };
+  const showStreamError = ()=>{
+    if(attemptToken !== playbackAttemptToken) return;
+    clearStartupTimer();
+    showToast('Stream error');
+    playerEl.classList.remove('loading');
+  };
+  const tryNextSource = ()=>{
+    if(attemptToken !== playbackAttemptToken) return;
+    clearStartupTimer();
+    if(sourceIndex < sources.length - 1) loadSourceAt(sourceIndex + 1);
+    else showStreamError();
+  };
+  const loadSourceAt = (index)=>{
+    if(attemptToken !== playbackAttemptToken) return;
+    clearStartupTimer();
+    sourceIndex = index;
+    const source = sources[sourceIndex];
+    if(!source){ showStreamError(); return; }
+    recoveries = 0;
+    destroyHls(true);
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+
+    if(source.endsWith('.m3u8') || source.includes('.m3u8?')){
     if(window.Hls && Hls.isSupported()){
       hls = new Hls({
         autoStartLoad: true,
@@ -944,30 +1051,54 @@ async function playItem(id){
         maxBufferLength: 20,
         startLevel: -1,
       });
-      hls.loadSource(url);
       hls.attachMedia(video);
+      playbackStartupTimer = setTimeout(tryNextSource, 18000);
+      hls.on(Hls.Events.MEDIA_ATTACHED, ()=>{
+        if(attemptToken !== playbackAttemptToken) return;
+        hls.loadSource(source);
+      });
       hls.on(Hls.Events.MANIFEST_PARSED, ()=>{
+        if(attemptToken !== playbackAttemptToken) return;
+        clearStartupTimer();
         availableQualities = hls.levels || [];
         document.getElementById('qualityBtn').style.display = availableQualities.length>1?'flex':'none';
         startWhenReady();
       });
       hls.on(Hls.Events.ERROR, (_,d)=>{
+        if(attemptToken !== playbackAttemptToken) return;
         if(!d || !d.fatal) return;
-        if(d.type === Hls.ErrorTypes.NETWORK_ERROR){ try{ hls.startLoad(); }catch(e){} }
-        else if(d.type === Hls.ErrorTypes.MEDIA_ERROR){ try{ hls.recoverMediaError(); }catch(e){} }
-        else { showToast('Stream error'); playerEl.classList.remove('loading'); }
+        if(d.type === Hls.ErrorTypes.NETWORK_ERROR && recoveries < 1){ recoveries++; try{ hls.startLoad(); }catch(e){} }
+        else if(d.type === Hls.ErrorTypes.MEDIA_ERROR && recoveries < 1){ recoveries++; try{ hls.recoverMediaError(); }catch(e){} }
+        else tryNextSource();
       });
     } else if(video.canPlayType('application/vnd.apple.mpegurl')){
-      video.src = url;
-      video.addEventListener('loadedmetadata', startWhenReady, {once:true});
+      video.src = source;
+      video.load();
+      playbackStartupTimer = setTimeout(tryNextSource, 18000);
+      addOnce(video, 'loadedmetadata', ()=>{ clearStartupTimer(); startWhenReady(); });
+      addOnce(video, 'canplay', ()=>{ clearStartupTimer(); startWhenReady(); });
+      addOnce(video, 'error', tryNextSource);
+    } else {
+      tryNextSource();
     }
   } else {
-    video.src = url;
-    video.addEventListener('loadedmetadata', startWhenReady, {once:true});
+    video.src = source;
+    video.load();
+    playbackStartupTimer = setTimeout(tryNextSource, 18000);
+    addOnce(video, 'loadedmetadata', ()=>{ clearStartupTimer(); startWhenReady(); });
+    addOnce(video, 'canplay', ()=>{ clearStartupTimer(); startWhenReady(); });
+    addOnce(video, 'error', tryNextSource);
     document.getElementById('qualityBtn').style.display='none';
   }
+  };
+  loadSourceAt(0);
 }
-function destroyHls(){ if(hls){try{hls.destroy()}catch(e){} hls=null;} }
+function destroyHls(keepAttemptToken=false){
+  if(!keepAttemptToken) playbackAttemptToken++;
+  if(playbackStartupTimer){ clearTimeout(playbackStartupTimer); playbackStartupTimer = null; }
+  playbackCleanupFns.splice(0).forEach(fn=>{try{fn()}catch(e){}});
+  if(hls){try{hls.destroy()}catch(e){} hls=null;}
+}
 function saveResume(){
   const item = ALL[currentItemId];
   if(item && item.kind!=='live' && currentItemId!==null && isFinite(video.duration) && video.duration>0 && video.currentTime>5 && video.currentTime < video.duration-10){
