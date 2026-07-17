@@ -551,13 +551,13 @@ body.search-active .search-backdrop{opacity:1;pointer-events:auto}
 <script>
 /* ====================== CONFIG ====================== */
 const XTREAM = {
-  server: "filex.asia:8080",
+  server: "omax.vip",
   port: 80,
-  user: "6754299551",
-  pass: "4577423996",
+  user: "11343",
+  pass: "11632",
 };
-const API_BASE = `http://${XTREAM.server}/player_api.php?username=${XTREAM.user}&password=${XTREAM.pass}`;
-const STREAM_BASE = `http://${XTREAM.server}`;
+const API_BASE = `https://${XTREAM.server}/player_api.php?username=${XTREAM.user}&password=${XTREAM.pass}`;
+const STREAM_BASE = `https://${XTREAM.server}`;
 
 const PROXIES = [
   u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
